@@ -11,6 +11,7 @@ public class HttpClientConfiguration {
     @Bean
     HttpClient jdkHttpClient(OrchestratorProperties properties) {
         return HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(properties.proxyConnectTimeout())
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();

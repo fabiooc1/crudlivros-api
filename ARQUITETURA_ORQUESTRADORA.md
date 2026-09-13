@@ -31,9 +31,9 @@ A posição define a prioridade inicial. O primeiro backend saudável será esco
 BACKENDS=http://api-python:8000,http://api-javascript:3000,http://api-go:8081
 ```
 
-Copie `.env.example` para `.env` e preencha `BACKENDS`. O Spring Boot não lê `.env` sozinho. No Docker Compose use `env_file: .env`; na execução local exporte as variáveis ou configure-as na IDE.
+Copie `.env.example` para `.env` e preencha `BACKENDS`, por exemplo `BACKENDS=http://localhost:5001`. A aplicação carrega o `.env` do diretório de execução automaticamente. Execute pela raiz do projeto ou configure esse diretório como working directory na IDE. Use valores sem aspas e sem o prefixo `export`, pois o arquivo é lido como Java properties. Variáveis de ambiente do processo têm prioridade sobre o arquivo. No Docker Compose use `env_file: .env`.
 
-Se `BACKENDS` não for informado, a execução direta usa os defaults de desenvolvimento `http://localhost:8000,http://localhost:3000` definidos em `application.properties`.
+`BACKENDS` é obrigatório e deve conter ao menos uma URL. Reinicie a aplicação após alterar o `.env`.
 
 ## Health-check e estados
 
@@ -87,7 +87,7 @@ Qualquer outro caminho é tratado como recurso do backend e encaminhado sem conh
 
 | Variável | Default | Descrição |
 | --- | --- | --- |
-| `BACKENDS` | localhost:8000 e localhost:3000 | URLs separadas por vírgula |
+| `BACKENDS` | Sem default (obrigatório) | URLs separadas por vírgula |
 | `SERVER_PORT` | `8080` | Porta da API Java |
 | `BACKEND_HEALTH_PATH` | `/health` | Caminho de saúde em cada backend |
 | `HEALTH_CHECK_INTERVAL` | `3000` | Intervalo entre verificações, em ms |
@@ -102,7 +102,7 @@ Com Java 21 instalado:
 
 ```bash
 cp .env.example .env
-# edite BACKENDS e exporte as variáveis do arquivo
+# edite BACKENDS no .env (não é necessário exportar)
 ./mvnw spring-boot:run
 ```
 

@@ -13,7 +13,7 @@ import crudlivros_api.sistemasdestribuidos.routing.BackendRegistry;
 import crudlivros_api.sistemasdestribuidos.routing.BackendSnapshot;
 
 @RestController
-@RequestMapping("/api/v1/orchestrator")
+@RequestMapping("/backends")
 public class OrchestratorController {
 
     private final BackendRegistry registry;
