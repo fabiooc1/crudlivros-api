@@ -25,7 +25,7 @@ O `.env` não possui arrays nativos. Por isso, `BACKENDS` usa uma lista de URLs 
 BACKENDS=http://api-python:8000,http://api-javascript:3000
 ```
 
-A posição define a prioridade inicial. O primeiro backend saudável será escolhido na primeira eleição. É possível adicionar instâncias sem alterar o código:
+A posição define a prioridade em cada eleição: o primeiro backend elegível na lista tem preferência. Tanto `HEALTHY` quanto `DEGRADED` são elegíveis, sem preferência de um estado sobre o outro. Um líder elegível é mantido, mesmo que um backend anterior na lista se recupere. É possível adicionar instâncias sem alterar o código:
 
 ```dotenv
 BACKENDS=http://api-python:8000,http://api-javascript:3000,http://api-go:8081
@@ -64,15 +64,19 @@ O formato esperado do backend é:
 
 - O líder atual é mantido enquanto permanecer elegível.
 - Falhas consecutivas são contabilizadas por nó.
-- Ao atingir `FAILURE_THRESHOLD`, o líder é marcado como indisponível.
+- Nas checagens periódicas e nas respostas 5xx do proxy, atingir `FAILURE_THRESHOLD` marca o nó como indisponível; um health-check que declara indisponibilidade o remove imediatamente.
+- Uma falha de comunicação durante o encaminhamento remove o líder imediatamente, sem esperar o limite nem a próxima checagem periódica.
+- Nesse caso, os demais backends são consultados no endpoint de saúde, na ordem de prioridade, até confirmar um candidato disponível. Uma falha nessa checagem imediata já descarta o candidato, mesmo que o estado anterior fosse saudável.
 - O próximo backend elegível de maior prioridade é promovido.
 - Um backend recuperado volta apenas como backup; ele não toma a liderança automaticamente.
-- Sem nenhum backend elegível, o proxy responde HTTP 503.
+- Quando uma requisição chega sem líder, o proxy também tenta uma checagem imediata antes de responder HTTP 503 por falta de backend elegível.
 - Toda troca de líder é registrada em log com origem, destino e motivo.
 
-Falhas HTTP funcionais, como 400 e 404, não contam como falha do backend. Respostas 5xx e erros de comunicação contam.
+Falhas HTTP funcionais, como 400 e 404, não contam como falha do backend. Respostas 5xx contam para o limite e são devolvidas ao cliente sem repetição automática. Erros de comunicação disparam a recuperação imediata.
 
-Requisições seguras (`GET`, `HEAD` e `OPTIONS`) podem ser repetidas uma vez no novo líder quando a falha causar uma troca. Escritas não são repetidas automaticamente após timeout, porque o backend anterior pode ter confirmado a operação antes de a resposta se perder. Repetição segura de escritas exigiria um contrato de idempotência entre todas as APIs.
+Requisições seguras (`GET`, `HEAD` e `OPTIONS`) são repetidas no candidato confirmado. Se ele também falhar na comunicação, a busca continua, sem encaminhar a mesma requisição mais de uma vez ao mesmo nó. Escritas também disparam a eleição, mas não são repetidas automaticamente, porque o backend anterior pode ter confirmado a operação antes de a resposta se perder. Repetição segura de escritas exigiria um contrato de idempotência entre todas as APIs.
+
+A recuperação ainda depende dos timeouts de conexão, requisição e saúde; ela dispensa esperar o próximo intervalo do agendador. Checagens imediatas e periódicas não executam simultaneamente: se já houver uma rodada em andamento, a checagem imediata aguarda sua conclusão.
 
 ## API de gerenciamento
 
@@ -94,7 +98,7 @@ Qualquer outro caminho é tratado como recurso do backend e encaminhado sem conh
 | `HEALTH_CHECK_TIMEOUT` | `1000` | Timeout do health-check, em ms |
 | `PROXY_CONNECT_TIMEOUT` | `1000` | Timeout de conexão, em ms |
 | `PROXY_READ_TIMEOUT` | `3000` | Timeout de uma chamada encaminhada, em ms |
-| `FAILURE_THRESHOLD` | `3` | Falhas consecutivas antes de remover um nó |
+| `FAILURE_THRESHOLD` | `3` | Limite para falhas periódicas e respostas 5xx; falhas de comunicação no proxy removem imediatamente |
 
 ## Execução
 
