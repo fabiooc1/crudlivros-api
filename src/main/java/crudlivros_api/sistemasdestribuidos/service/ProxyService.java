@@ -4,11 +4,11 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 import org.springframework.http.HttpHeaders;
@@ -30,31 +30,49 @@ public class ProxyService {
     private static final Set<String> SAFE_METHODS = Set.of("GET", "HEAD", "OPTIONS");
     private static final Set<String> RESPONSE_HEADERS_TO_IGNORE = Set.of(
             "connection", "content-length", "keep-alive", "proxy-authenticate",
-            "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade");
+            "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
+            "access-control-allow-origin", "access-control-allow-methods",
+            "access-control-allow-headers", "access-control-allow-credentials",
+            "access-control-expose-headers", "access-control-max-age");
 
     private final BackendRegistry registry;
     private final BackendHttpClient httpClient;
     private final OrchestratorProperties properties;
+    private final HealthCheckService healthCheckService;
 
     public ProxyService(
             BackendRegistry registry,
             BackendHttpClient httpClient,
-            OrchestratorProperties properties) {
+            OrchestratorProperties properties,
+            HealthCheckService healthCheckService) {
         this.registry = registry;
         this.httpClient = httpClient;
         this.properties = properties;
+        this.healthCheckService = healthCheckService;
     }
 
     public ResponseEntity<byte[]> forward(HttpServletRequest request, byte[] body) {
-        BackendNode leader = registry.currentLeader().orElseThrow(NoBackendAvailableException::new);
-        try {
-            return execute(leader, request, body);
-        } catch (IOException exception) {
-            return handleCommunicationFailure(leader, request, body, exception);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            registry.registerFailure(leader, "requisição interrompida");
-            throw new BackendCommunicationException("A comunicação com o backend foi interrompida", exception);
+        Set<BackendNode> attempted = new HashSet<>();
+        BackendNode leader = registry.currentLeader()
+                .or(() -> healthCheckService.findAvailableReplacement(attempted))
+                .orElseThrow(NoBackendAvailableException::new);
+        while (true) {
+            attempted.add(leader);
+            try {
+                return execute(leader, request, body);
+            } catch (IOException exception) {
+                registry.markUnavailable(leader, "falha de comunicação: " + exception.getClass().getSimpleName());
+                var replacement = healthCheckService.findAvailableReplacement(attempted);
+                if (SAFE_METHODS.contains(request.getMethod().toUpperCase(Locale.ROOT)) && replacement.isPresent()) {
+                    leader = replacement.get();
+                    continue;
+                }
+                throw new BackendCommunicationException("Não foi possível obter resposta do backend líder", exception);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                registry.registerFailure(leader, "requisição interrompida");
+                throw new BackendCommunicationException("A comunicação com o backend foi interrompida", exception);
+            }
         }
     }
 
@@ -74,29 +92,6 @@ public class ProxyService {
             registry.registerRequestSuccess(node);
         }
         return toClientResponse(response, node);
-    }
-
-    private ResponseEntity<byte[]> handleCommunicationFailure(
-            BackendNode failedNode,
-            HttpServletRequest request,
-            byte[] body,
-            IOException originalException) {
-        registry.registerFailure(failedNode, originalException.getClass().getSimpleName());
-
-        if (SAFE_METHODS.contains(request.getMethod().toUpperCase(Locale.ROOT))) {
-            Optional<BackendNode> replacement = registry.currentLeader().filter(node -> node != failedNode);
-            if (replacement.isPresent()) {
-                try {
-                    return execute(replacement.get(), request, body);
-                } catch (InterruptedException exception) {
-                    Thread.currentThread().interrupt();
-                } catch (IOException exception) {
-                    registry.registerFailure(replacement.get(), exception.getClass().getSimpleName());
-                }
-            }
-        }
-
-        throw new BackendCommunicationException("Não foi possível obter resposta do backend líder", originalException);
     }
 
     private URI buildTargetUri(BackendNode node, HttpServletRequest request) {
